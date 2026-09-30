@@ -980,3 +980,189 @@ Each team may implement perception, localization, planning, control, and mission
 However, when communicating with another system, the vehicle must use the common interface defined in this document.
 
 This allows the UAV, USV, UUV, and RoboCommand systems to be developed and tested independently while still operating as a single integrated RobotX System-of-Systems.
+
+---
+
+# 21. ROS 2 Interface Package — `rx_msgs`
+
+The System Interface is implemented as a single ROS 2 interface package:
+
+```text
+rx_msgs/
+├── CMakeLists.txt
+├── package.xml
+└── msg/
+    ├── LatLng.msg
+    ├── VehicleType.msg
+    ├── RobotState.msg
+    ├── FlightPhase.msg
+    ├── RxTask.msg
+    ├── TaskTier.msg
+    ├── Color.msg
+    ├── MissionRequest.msg
+    ├── MissionCommand.msg
+    ├── MissionStatus.msg
+    ├── Heartbeat.msg
+    ├── BuoyDetection.msg
+    ├── Delivery.msg
+    ├── PipelineStatus.msg
+    ├── Docking.msg
+    └── Task4Status.msg
+```
+
+All four systems (RoboCommand, UAV, USV, UUV) depend on this package. No other interface package is needed: the contract is the `/system/...` topics defined in this document, typed by the `rx_msgs` messages below.
+
+## 21.1 Topic → Message Type Mapping
+
+| Topic | Type |
+| --- | --- |
+| `/system/mission/request` | `rx_msgs/msg/MissionRequest` |
+| `/system/mission/command` | `rx_msgs/msg/MissionCommand` |
+| `/system/mission/status` | `rx_msgs/msg/MissionStatus` |
+| `/system/vehicle/uav/heartbeat` | `rx_msgs/msg/Heartbeat` |
+| `/system/vehicle/usv/heartbeat` | `rx_msgs/msg/Heartbeat` |
+| `/system/vehicle/uuv/heartbeat` | `rx_msgs/msg/Heartbeat` |
+| `/system/vehicle/<vehicle>/task1/entry_buoy` | `rx_msgs/msg/LatLng` |
+| `/system/vehicle/<vehicle>/task1/exit_buoy` | `rx_msgs/msg/LatLng` |
+| `/system/vehicle/<vehicle>/task1/buoy_detection` | `rx_msgs/msg/BuoyDetection` |
+| `/system/vehicle/uav/task2/active_buoy` | `rx_msgs/msg/LatLng` |
+| `/system/vehicle/uuv/task2/active_buoy` | `rx_msgs/msg/LatLng` |
+| `/system/vehicle/uuv/task2/pipeline` | `rx_msgs/msg/PipelineStatus` |
+| `/system/vehicle/uav/task2/delivery` | `rx_msgs/msg/Delivery` |
+| `/system/vehicle/uuv/task2/delivery` | `rx_msgs/msg/Delivery` |
+| `/system/vehicle/uav/task3/delivery` | `rx_msgs/msg/Delivery` |
+| `/system/vehicle/usv/task3/delivery` | `rx_msgs/msg/Delivery` |
+| `/system/vehicle/usv/task3/docking` | `rx_msgs/msg/Docking` |
+| `/system/vehicle/uav/task4/status` | `rx_msgs/msg/Task4Status` |
+| `/system/vehicle/usv/task4/status` | `rx_msgs/msg/Task4Status` |
+| `/system/vehicle/uuv/task4/status` | `rx_msgs/msg/Task4Status` |
+
+## 21.2 Message Definitions
+
+```text
+rx_msgs/msg/LatLng
+    float64 lat_deg
+    float64 lon_deg
+
+rx_msgs/msg/MissionRequest
+    std_msgs/Header header
+    uint32 mission_id
+    string[] vehicle_id
+    uint8[] task_tier              # TaskTier constants
+    rx_msgs/LatLng[] uav_geofence
+
+rx_msgs/msg/MissionCommand
+    std_msgs/Header header
+    uint64 command_seq
+    uint8 target_vehicle           # VehicleType constants, UNKNOWN = broadcast
+    uint8 command_type             # MissionCommand constants
+    rx_msgs/LatLng target          # CMD_TASK4_NAVIGATE / CMD_TASK4_AVOID_ZONE
+    float32 radius_m               # CMD_TASK4_AVOID_ZONE
+    rx_msgs/LatLng obstacle_position    # CMD_TASK4_DYNAMIC_AVOID
+    float32 obstacle_heading_deg
+    float32 obstacle_speed_mps
+    uint8 resource_color           # CMD_DELIVERY, Color constants
+    uint8 delivery_color
+    string detail
+
+rx_msgs/msg/MissionStatus
+    std_msgs/Header header
+    uint32 mission_id
+    string vehicle_id
+    uint8 state                    # RobotState constants
+    uint8 current_task             # RxTask constants
+    string message
+
+rx_msgs/msg/Heartbeat
+    std_msgs/Header header
+    uint8 state                    # RobotState constants
+    rx_msgs/LatLng position
+    float32 spd_mps
+    float32 heading_deg
+    float32 roll_deg
+    float32 pitch_deg
+    float32 altitude_hae_m
+    float32 depth_m                # UUV only
+    uint8 current_task             # RxTask constants
+    uint8 vehicle_type             # VehicleType constants
+    uint8 flight_phase             # FlightPhase constants, UAV only
+
+rx_msgs/msg/BuoyDetection
+    std_msgs/Header header
+    rx_msgs/LatLng position
+    uint8 state                    # BuoyDetection constants
+
+rx_msgs/msg/Delivery
+    std_msgs/Header header
+    uint8 resource_color           # Color constants
+    uint8 delivery_color
+
+rx_msgs/msg/PipelineStatus
+    std_msgs/Header header
+    uint8 status                   # PipelineStatus constants
+
+rx_msgs/msg/Docking
+    std_msgs/Header header
+    uint32 bay_id
+    uint32 extinguished_window_id
+
+rx_msgs/msg/Task4Status
+    std_msgs/Header header
+    uint64 command_seq             # must equal the received command_seq
+    uint8 status                   # Task4Status constants
+    string detail
+```
+
+## 21.3 Constants
+
+```text
+VehicleType:    UNKNOWN=255  UAV=0  USV=1  UUV=2
+
+RobotState:     STATE_UNKNOWN=0  STATE_OFFLINE=1  STATE_IDLE=2  STATE_READY=3
+                STATE_MISSION=4  STATE_RETURNING=5  STATE_LANDED=6  STATE_DOCKED=7
+                STATE_EMERGENCY=8  STATE_FAULT=9
+
+FlightPhase:    PHASE_UNKNOWN=0  PHASE_TAXI=1  PHASE_TAKEOFF=2  PHASE_CRUISE=3
+                PHASE_APPROACH=4  PHASE_LANDING=5  PHASE_LANDED=6  PHASE_EMERGENCY=7
+
+RxTask:         TASK_NONE=0  TASK_1=1  TASK_2=2  TASK_3=3  TASK_4=4
+
+TaskTier:       TIER_UNKNOWN=0  TIER_CORE=1  TIER_ADVANCE=2  TIER_DISRUPTIVE=3
+
+Color:          COLOR_UNKNOWN=0  COLOR_RED=1  COLOR_GREEN=2  COLOR_BLUE=3  COLOR_YELLOW=4
+
+MissionCommand: CMD_NONE=0  CMD_GO=1  CMD_MISSION_DONE=2  CMD_DELIVERY=3
+                CMD_TASK4_NAVIGATE=4  CMD_TASK4_AVOID_ZONE=5  CMD_TASK4_DYNAMIC_AVOID=6
+                CMD_READINESS_CONFIRM=7  CMD_ALL_CLEAR=8
+
+BuoyDetection:  STATE_UNKNOWN=0  STATE_NORMAL=1  STATE_DAMAGED=2  STATE_MISSING=3
+
+PipelineStatus: PIPELINE_UNKNOWN=0  PIPELINE_INTACT=1  PIPELINE_DAMAGED=2
+
+Task4Status:    TASK4_UNKNOWN=0  TASK4_RECEIVED=1  TASK4_NAVIGATING=2  TASK4_REACHED=3
+                TASK4_ACTIVE=4  TASK4_CLEARED=5  TASK4_REJECTED=6  TASK4_FAILED=7
+```
+
+## 21.4 Build and Usage
+
+```bash
+source /opt/ros/<distro>/setup.bash
+colcon build --packages-select rx_msgs
+source install/setup.bash
+```
+
+Inspect and use the interface:
+
+```bash
+ros2 interface show rx_msgs/MissionCommand
+ros2 interface list -p rx_msgs
+
+# example: publish a Task 4 Core command (RoboCommand, domain 10)
+ros2 topic pub -r 1 /system/mission/command rx_msgs/MissionCommand \
+  "{command_seq: 42, target_vehicle: 0, command_type: 4, target: {lat_deg: 1.02, lon_deg: 103.83}}"
+
+# example: echo a heartbeat (RoboCommand)
+ros2 topic echo /system/vehicle/uav/heartbeat rx_msgs/Heartbeat
+```
+
+Vehicle teams may add their own implementation packages (communication nodes, translation layers, etc.) on top of `rx_msgs`, but they must use exactly these topic names, message types, and constant values. If the protobuf definitions (`rx_request.proto`, `rx_report.proto`, `rx_common.proto`) evolve, `rx_msgs` must be updated so that all four systems continue to interoperate.

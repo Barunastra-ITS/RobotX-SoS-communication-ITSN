@@ -1,0 +1,9 @@
+# Flight phase, used by the UAV only
+uint8 PHASE_UNKNOWN = 0
+uint8 PHASE_TAXI = 1
+uint8 PHASE_TAKEOFF = 2
+uint8 PHASE_CRUISE = 3
+uint8 PHASE_APPROACH = 4
+uint8 PHASE_LANDING = 5
+uint8 PHASE_LANDED = 6
+uint8 PHASE_EMERGENCY = 7
