@@ -1,36 +1,40 @@
-# RobotX 2026 — System-of-Systems ROS 2 Interface
+# RobotX 2026 — Vehicle ⇄ GCS ROS 2 Interface (UAV · USV · UUV)
 
-This document is the communication contract for the three vehicles (one UAV, one USV, one UUV) and RoboCommand/GCS.
+This repository defines the ROS 2 interface between the team's three vehicles (one UAV, one USV, one UUV) and the team's GCS.
 
-Each vehicle is developed as an independent system. All inter-vehicle and RoboCommand communication must use the topics, message types, and constants defined here. Vehicle internals are free; the external interface must stay identical across all teams.
+- All vehicle ⇄ GCS communication uses the `/system/...` topics and `rx_msgs` types defined here.
+- The GCS is the team's only RoboCommand endpoint (MQTT + protobuf, handbook §3.4; implemented in the GCS repo). **Vehicles must not connect to RoboCommand directly.**
+- Message names and constant values mirror the official RoboCommand schemas (`robonation/robocommand`, `RobotX_2026/`), so the GCS can relay them to RoboCommand unchanged.
 
-**Rules**
+**Rules (vehicles)**
 
-- Use the exact topic names and `rx_msgs` message types defined in this document.
-- Never modify or regenerate `command_seq` when responding to a command.
-- Publish the heartbeat continuously while the vehicle is operational.
-- Keep internal topics (`/camera/...`, `/lidar/...`, `/map`, `/costmap`, `/tf`, `/tf_static`, `/vision_geo/...`) private to your ROS 2 domain. Only `/system/...` topics are routed between domains.
+- Use the exact topic names and `rx_msgs` message types defined here.
+- Publish the heartbeat at **2 Hz** while active. UAV heartbeats are relayed to Garuda Robotics (Network Remote ID) and must be complete and reliable.
+- `current_task` transitions are authoritative: a transition into a task value begins the attempt; a transition to `TASK_NONE` ends it. Never use `TASK_UNKNOWN`.
+- Preserve the sequence references exactly as received (`command_seq`, `report_seq`); never renumber.
+- Use `TIER_NONE`, not `TIER_UNKNOWN`, for tasks the team is not attempting.
+- Keep internal topics (`/camera/...`, `/lidar/...`, `/map`, `/costmap`, `/tf`, `/tf_static`, ...) private to the vehicle; only `/system/...` crosses to the GCS.
 
 ---
 
-## 1. Domains
-
-| System            | ROS_DOMAIN_ID |
-| ----------------- | ------------: |
-| RoboCommand / GCS |        `10`   |
-| USV               |        `20`   |
-| UAV               |        `30`   |
-| UUV               |        `40`   |
-
-A DDS Router on the GCS bridges only `/system/...` topics between domains.
+## 1. Architecture
 
 ```text
-               RoboCommand / GCS (10)
+ UAV (domain 30)   USV (domain 20)   UUV (domain 40)
+        │               │               │
+        └────── ROS 2 /system/... ──────┘   DDS Router: /system/... only
                         │
-              DDS Router — /system/... only
-       ┌────────────────┼────────────────┐
-      USV (20)        UAV (30)        UUV (40)
+                    Team GCS (domain 10)
 ```
+
+| System | ROS_DOMAIN_ID |
+| ------ | ------------: |
+| GCS    |        `10`   |
+| USV    |        `20`   |
+| UAV    |        `30`   |
+| UUV    |        `40`   |
+
+The GCS publishes course configuration and commands to the vehicles and collects their heartbeats and task reports. How the GCS talks to RoboCommand is out of scope for this repository.
 
 ---
 
@@ -50,26 +54,29 @@ A DDS Router on the GCS bridges only `/system/...` topics between domains.
 
 ### 3.1 Mission topics
 
-| Topic                     | Direction | Type                  |
-| ------------------------- | --------- | --------------------- |
-| `/system/mission/request` | subscribe | `rx_msgs/MissionRequest`   |
-| `/system/mission/command` | subscribe | `rx_msgs/MissionCommand`   |
-| `/system/mission/status`  | publish   | `rx_msgs/MissionStatus`    |
+| Topic                   | Direction | Type                  |
+| ----------------------- | --------- | --------------------- |
+| `/system/mission/course` | subscribe | `rx_msgs/Course`     |
+| `/system/mission/command` | subscribe | `rx_msgs/Command`  |
+| `/system/mission/status` | publish   | `rx_msgs/MissionStatus` |
 
-- `MissionRequest` arrives before the mission starts and carries the whole configuration (`vehicle_id[]`, `task_tier[]`, `uav_geofence`) as a single message.
-- `MissionCommand` selects its target with `target_vehicle` (`255` = broadcast). Subscribe only to commands relevant to your vehicle.
-- Publish `MissionStatus` with your overall mission state.
+- `Course` is published once before the run: `course_id`, `pinger_freq_hz` (UUV homing), the course boundary (closed polygon), and the `uav_geofence` (closed polygon within the boundary).
+- `Command` targets a vehicle via `target_vehicle` (`TYPE_UNKNOWN` = all vehicles). `CMD_RUN_START` carries `run_id`.
+- **Position-hold until the run start:** after switching to autonomous mode, no vehicle begins the run until `CMD_RUN_START` is received.
 
 ### 3.2 Heartbeat
 
-Publish `/system/vehicle/<vehicle>/heartbeat` (`rx_msgs/Heartbeat`) continuously (≥ 1 Hz) while operational.
+Publish `/system/vehicle/<vehicle>/heartbeat` (`rx_msgs/Heartbeat`) at 2 Hz while active.
 
-| Field                                                                  | UAV | USV | UUV |
-| ---------------------------------------------------------------------- | :-: | :-: | :-: |
+| Field                                                                   | UAV | USV | UUV |
+| ----------------------------------------------------------------------- | :-: | :-: | :-: |
 | `state`, `position`, `spd_mps`, `heading_deg`, `roll_deg`, `pitch_deg`, `altitude_hae_m` | ✓ | ✓ | ✓ |
-| `depth_m`                                                              |  —  |  —  |  ✓  |
-| `current_task`, `vehicle_type`                                         |  ✓  |  ✓  |  ✓  |
-| `flight_phase`                                                         |  ✓  |  —  |  —  |
+| `depth_m`                                                                |  —  |  —  |  ✓  |
+| `current_task`, `vehicle_type`                                          |  ✓  |  ✓  |  ✓  |
+| `flight_phase`                                                           |  ✓  |  —  |  —  |
+
+- `state` is `STATE_KILLED`, `STATE_MANUAL`, or `STATE_AUTO`; each autonomous and ready vehicle reports `STATE_AUTO` before the run starts.
+- `current_task` uses `RxTask` values (`TASK_SAFE_PASSAGE`, `TASK_INFRA_SURVEY_REPAIR`, `TASK_COORDINATED_LOGISTICS`, `TASK_DYNAMIC_INCIDENT`); `TASK_NONE` = no task in progress.
 
 ---
 
@@ -77,64 +84,79 @@ Publish `/system/vehicle/<vehicle>/heartbeat` (`rx_msgs/Heartbeat`) continuously
 
 ### 4.1 UAV
 
-| Topic                                    | Type                  |
-| ---------------------------------------- | --------------------- |
-| `/system/vehicle/uav/task1/entry_buoy`   | `rx_msgs/LatLng`      |
-| `/system/vehicle/uav/task1/exit_buoy`    | `rx_msgs/LatLng`      |
-| `/system/vehicle/uav/task1/buoy_detection` | `rx_msgs/BuoyDetection` |
-| `/system/vehicle/uav/task2/active_buoy`  | `rx_msgs/LatLng`      |
-| `/system/vehicle/uav/task2/delivery`     | `rx_msgs/Delivery`    |
-| `/system/vehicle/uav/task3/delivery`     | `rx_msgs/Delivery`    |
-| `/system/vehicle/uav/task4/status`       | `rx_msgs/Task4Status` |
+| Topic                                  | Type                   |
+| -------------------------------------- | ---------------------- |
+| `/system/vehicle/uav/task1/safe_passage` | `rx_msgs/SafePassage`  |
+| `/system/vehicle/uav/task2/delivery`   | `rx_msgs/ResourceDelivery` |
+| `/system/vehicle/uav/task3/delivery`   | `rx_msgs/ResourceDelivery` |
+| `/system/vehicle/uav/task4/incident_ack` | `rx_msgs/IncidentAck`  |
+| `/system/vehicle/uav/task4/readiness`  | `rx_msgs/ReadinessReport` |
 
-- Task 1 is UAV-only: the buoy reports above feed the USV's mission planning (see 4.2).
-- Task 2 reports are required for the Advance and Disruptive tiers.
-- **Legacy bridge:** the existing UAV mission controller consumes the internal `/mission/order` topic with string commands (`UAV-GO`, `UAV-GO:RED:GREEN`, `MISSION-DONE`). Your communication layer must translate `/system/mission/command` into these strings and keep `/mission/order` inside the UAV domain.
+- **Task 1 (UAV-only):** the UAV detects the buoy field and publishes `SafePassage` (entry, exit, all buoys) whenever a detection updates; the USV subscribes to it for mission planning. The handbook assigns the Task 1 report to the USV/UUV at Core tier and to the UAV at Advanced/Disruptive — the GCS attributes the report to the detecting vehicle, so align the declared tier with the detecting vehicle.
+- **Delivery echo:** when the UAV begins a delivery, it publishes `ResourceDelivery` echoing the `resource_color` and `delivery_circle_color` of the detecting vehicle's request (`task` = the delivery task).
+- Enforce the `uav_geofence` from `/system/mission/course`.
+- **Legacy bridge:** the existing UAV mission controller consumes the internal `/mission/order` topic with string commands (`UAV-GO`, `UAV-GO:RED:GREEN`, `MISSION-DONE`). The communication layer must translate `Command` messages (`CMD_GO`, `CMD_DELIVERY`, `CMD_MISSION_DONE`) into these strings and keep `/mission/order` inside the UAV domain.
 
 ### 4.2 USV
 
-| Topic                                   | Type                  |
-| --------------------------------------- | --------------------- |
-| `/system/vehicle/usv/task3/docking`     | `rx_msgs/Docking`     |
-| `/system/vehicle/usv/task3/delivery`    | `rx_msgs/Delivery`    |
-| `/system/vehicle/usv/task4/status`      | `rx_msgs/Task4Status` |
+| Topic                                    | Type                   |
+| ---------------------------------------- | ---------------------- |
+| `/system/vehicle/usv/task3/docking`      | `rx_msgs/Docking`      |
+| `/system/vehicle/usv/task3/firefighting` | `rx_msgs/Firefighting` |
+| `/system/vehicle/usv/task3/delivery`     | `rx_msgs/ResourceDelivery` |
+| `/system/vehicle/usv/task4/incident_ack` | `rx_msgs/IncidentAck`  |
+| `/system/vehicle/usv/task4/readiness`    | `rx_msgs/ReadinessReport` |
 
-- **Subscribes** to the UAV Task 1 buoy reports (`/system/vehicle/uav/task1/entry_buoy`, `exit_buoy`, `buoy_detection`) for mission planning.
-- `Docking` carries `bay_id` and `extinguished_window_id` (the window/light that was extinguished and changed from red to green).
+- **Subscribes** to `/system/vehicle/uav/task1/safe_passage` for mission planning.
+- `Docking.bay_id` = bay (1–3) of the safe (GREEN) bay; docking also signals readiness for tasking — the window light activates after the GCS forwards the report.
+- `Firefighting.window_id` = the window whose light changed RED → GREEN after the water delivery.
+- When the USV reads the flashing LED code, publish `ResourceDelivery` with `task = TASK_COORDINATED_LOGISTICS`.
 
 ### 4.3 UUV
 
 | Topic                                    | Type                   |
 | ---------------------------------------- | ---------------------- |
-| `/system/vehicle/uuv/task2/active_buoy`  | `rx_msgs/LatLng`       |
-| `/system/vehicle/uuv/task2/pipeline`     | `rx_msgs/PipelineStatus` |
-| `/system/vehicle/uuv/task2/delivery`     | `rx_msgs/Delivery`     |
-| `/system/vehicle/uuv/task4/status`       | `rx_msgs/Task4Status`  |
+| `/system/vehicle/uuv/task2/pipeline_survey` | `rx_msgs/PipelineSurvey` |
+| `/system/vehicle/uuv/task2/delivery`     | `rx_msgs/ResourceDelivery` |
+| `/system/vehicle/uuv/task4/incident_ack` | `rx_msgs/IncidentAck`  |
+| `/system/vehicle/uuv/task4/readiness`    | `rx_msgs/ReadinessReport` |
 
-- The active buoy is identified using the acoustic pinger.
-- **Store-and-forward:** no continuous communication while submerged. When surfaced and Wi-Fi connected, synchronize the system topics, wait for the ACK, then dive again. High-bandwidth sensor data stays local.
-
----
-
-## 5. Task 4 — Coordinated Commands
-
-All Task 4 commands arrive on `/system/mission/command`. Responses are published on `/system/vehicle/<vehicle>/task4/status` (`rx_msgs/Task4Status`).
-
-| `command_type`            | Fields                                        | Behavior                                                                                                                                       |
-| ------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CMD_TASK4_NAVIGATE` (Core) | `target`                                    | Navigate to the target. Report the received `command_seq` on receipt and again on arrival. Wait for `CMD_READINESS_CONFIRM`, then resume the previous mission. |
-| `CMD_TASK4_AVOID_ZONE` (Advance) | `target`, `radius_m`                   | Avoid the circular region. Report the `command_seq`. After `CMD_ALL_CLEAR`, report the same `command_seq`.                                             |
-| `CMD_TASK4_DYNAMIC_AVOID` (Disruptive) | `obstacle_position`, `obstacle_heading_deg`, `obstacle_speed_mps` | Use the other vehicle as an external dynamic obstacle.                                                     |
-
-`CMD_READINESS_CONFIRM` and `CMD_ALL_CLEAR` are also sent on `/system/mission/command`.
-
-**`command_seq` rule:** every response must carry exactly the `command_seq` received with the command. The vehicle must never generate or renumber it.
-
-`Task4Status.status`: `TASK4_RECEIVED`, `TASK4_NAVIGATING`, `TASK4_REACHED`, `TASK4_ACTIVE`, `TASK4_CLEARED`, `TASK4_REJECTED`, `TASK4_FAILED`.
+- `PipelineSurvey` = active (GREEN) buoy position plus segment statuses ordered from the active buoy end. Send it once, after the survey and (Advanced tier) the repair — typically when surfaced, since the UUV cannot transmit while submerged.
+- **Store-and-forward:** no continuous communication while submerged; when surfaced and connected, synchronize `/system/...` topics, wait for the ACK, then dive again.
+- Use `Course.pinger_freq_hz` for acoustic homing.
+- When the UUV reads the flashing LED code, publish `ResourceDelivery` with `task = TASK_INFRA_SURVEY_REPAIR`.
 
 ---
 
-## 6. `rx_msgs` Package
+## 5. Task 4 — Dynamic Incident Response
+
+Commands arrive on `/system/mission/command`; responses are published on `/system/vehicle/<vehicle>/task4/...`.
+
+| Tier       | Flow                                                              |
+| ---------- | ----------------------------------------------------------------- |
+| Core       | assistance request → ack → readiness report → readiness confirm   |
+| Advanced   | keep-out zone → ack → all clear → ack                             |
+| Disruptive | moving object alert — keep ≥ 10 m from the object; no ack or clear |
+
+Vehicle behavior:
+
+- `CMD_TASK4_ASSISTANCE` (`position`): publish `IncidentAck{command_seq}` on receipt, transit to the position, then publish `ReadinessReport{command_seq}` (same seq as the assistance command). On `CMD_TASK4_READINESS_CONFIRM` (matched by `report_seq` + vehicle), resume the previous mission.
+- `CMD_TASK4_KEEP_OUT_ZONE` (`center`, `radius_m`): publish `IncidentAck{command_seq}`, stay outside the zone. On `CMD_TASK4_ALL_CLEAR`: publish `IncidentAck{command_seq}` and resume.
+- `CMD_TASK4_MOVING_OBJECT` (`position`, `heading_deg`, `speed_mps`): treat the object as a dynamic external obstacle; no acknowledgement.
+
+---
+
+## 6. Pre-Run Sequence
+
+1. The GCS relays the course configuration to the vehicles as `/system/mission/course` (from the RoboCommand course config, with the team's UAV geofence).
+2. The GCS publishes the team's `RunDeclaration` to RoboCommand: all participating vehicle IDs, the tier per task (`TIER_NONE` when not attempting), and the closed UAV geofence.
+3. Vehicles publish heartbeats; each autonomous vehicle reports `STATE_AUTO`.
+4. The GCS relays the run start as `CMD_RUN_START` (after RoboCommand has accepted the declaration).
+5. Vehicles hold position until step 4, then begin the run.
+
+---
+
+## 7. `rx_msgs` Package
 
 ```bash
 colcon build --packages-select rx_msgs
@@ -142,37 +164,39 @@ source install/setup.bash
 ros2 interface list | grep rx_msgs
 ```
 
-### 6.1 Message definitions
+### 7.1 Message definitions
 
 ```text
 rx_msgs/msg/LatLng
-    float64 lat_deg
-    float64 lon_deg
+    float64 latitude
+    float64 longitude
 
-rx_msgs/msg/MissionRequest
-    std_msgs/Header header
-    uint32 mission_id
-    string[] vehicle_id
-    uint8[] task_tier              # TaskTier constants
+rx_msgs/msg/Course
+    string course_id
+    uint32 pinger_freq_hz
+    rx_msgs/LatLng[] boundary
     rx_msgs/LatLng[] uav_geofence
 
-rx_msgs/msg/MissionCommand
+rx_msgs/msg/Command
     std_msgs/Header header
-    uint64 command_seq
-    uint8 target_vehicle           # VehicleType constants, UNKNOWN = broadcast
-    uint8 command_type             # MissionCommand constants
-    rx_msgs/LatLng target          # CMD_TASK4_NAVIGATE / CMD_TASK4_AVOID_ZONE
-    float32 radius_m               # CMD_TASK4_AVOID_ZONE
-    rx_msgs/LatLng obstacle_position    # CMD_TASK4_DYNAMIC_AVOID
-    float32 obstacle_heading_deg
-    float32 obstacle_speed_mps
+    uint32 command_seq
+    uint8 target_vehicle           # VehicleType constants, TYPE_UNKNOWN = all
+    uint8 command_type             # Command constants
+    uint32 run_id                  # CMD_RUN_START
+    rx_msgs/LatLng position        # CMD_TASK4_ASSISTANCE / CMD_TASK4_MOVING_OBJECT
+    rx_msgs/LatLng center          # CMD_TASK4_KEEP_OUT_ZONE
+    float32 radius_m               # CMD_TASK4_KEEP_OUT_ZONE
+    float32 heading_deg            # CMD_TASK4_MOVING_OBJECT
+    float32 speed_mps              # CMD_TASK4_MOVING_OBJECT
+    uint32 report_seq              # CMD_TASK4_READINESS_CONFIRM
+    uint8 task                     # CMD_DELIVERY, RxTask constants
     uint8 resource_color           # CMD_DELIVERY, Color constants
-    uint8 delivery_color
+    uint8 delivery_circle_color    # CMD_DELIVERY, Color constants
     string detail
 
 rx_msgs/msg/MissionStatus
     std_msgs/Header header
-    uint32 mission_id
+    uint32 run_id
     string vehicle_id
     uint8 state                    # RobotState constants
     uint8 current_task             # RxTask constants
@@ -193,59 +217,69 @@ rx_msgs/msg/Heartbeat
     uint8 flight_phase             # FlightPhase constants, UAV only
 
 rx_msgs/msg/BuoyDetection
-    std_msgs/Header header
     rx_msgs/LatLng position
-    uint8 state                    # BuoyDetection constants
+    uint8 state                    # BeaconState constants
 
-rx_msgs/msg/Delivery
+rx_msgs/msg/SafePassage
     std_msgs/Header header
+    rx_msgs/LatLng entry_position
+    rx_msgs/LatLng exit_position
+    rx_msgs/BuoyDetection[] buoys
+
+rx_msgs/msg/PipelineSurvey
+    std_msgs/Header header
+    rx_msgs/LatLng active_buoy_position
+    uint8[] segments               # PipelineSegmentStatus constants
+
+rx_msgs/msg/ResourceDelivery
+    std_msgs/Header header
+    uint8 task                     # RxTask constants
     uint8 resource_color           # Color constants
-    uint8 delivery_color
-
-rx_msgs/msg/PipelineStatus
-    std_msgs/Header header
-    uint8 status                   # PipelineStatus constants
+    uint8 delivery_circle_color    # Color constants
 
 rx_msgs/msg/Docking
     std_msgs/Header header
     uint32 bay_id
-    uint32 extinguished_window_id
 
-rx_msgs/msg/Task4Status
+rx_msgs/msg/Firefighting
     std_msgs/Header header
-    uint64 command_seq             # must equal the received command_seq
-    uint8 status                   # Task4Status constants
-    string detail
+    uint32 window_id
+
+rx_msgs/msg/IncidentAck
+    std_msgs/Header header
+    uint32 command_seq
+
+rx_msgs/msg/ReadinessReport
+    std_msgs/Header header
+    uint32 command_seq
 ```
 
-### 6.2 Constants
+### 7.2 Constants
+
+Values mirror the RoboCommand proto schemas exactly.
 
 ```text
-VehicleType:    UNKNOWN=255  UAV=0  USV=1  UUV=2
+VehicleType:            TYPE_UNKNOWN=0  TYPE_USV=1  TYPE_UUV=2  TYPE_UAV=3
 
-RobotState:     STATE_UNKNOWN=0  STATE_OFFLINE=1  STATE_IDLE=2  STATE_READY=3
-                STATE_MISSION=4  STATE_RETURNING=5  STATE_LANDED=6  STATE_DOCKED=7
-                STATE_EMERGENCY=8  STATE_FAULT=9
+RobotState:             STATE_UNKNOWN=0  STATE_KILLED=1  STATE_MANUAL=2  STATE_AUTO=3
 
-FlightPhase:    PHASE_UNKNOWN=0  PHASE_TAXI=1  PHASE_TAKEOFF=2  PHASE_CRUISE=3
-                PHASE_APPROACH=4  PHASE_LANDING=5  PHASE_LANDED=6  PHASE_EMERGENCY=7
+TaskTier:               TIER_UNKNOWN=0  TIER_NONE=1  TIER_CORE=2  TIER_ADVANCED=3  TIER_DISRUPTIVE=4
 
-RxTask:         TASK_NONE=0  TASK_1=1  TASK_2=2  TASK_3=3  TASK_4=4
+RxTask:                 TASK_UNKNOWN=0  TASK_NONE=1  TASK_SAFE_PASSAGE=2
+                        TASK_INFRA_SURVEY_REPAIR=3  TASK_COORDINATED_LOGISTICS=4  TASK_DYNAMIC_INCIDENT=5
 
-TaskTier:       TIER_UNKNOWN=0  TIER_CORE=1  TIER_ADVANCE=2  TIER_DISRUPTIVE=3
+BeaconState:            BEACON_STATE_UNKNOWN=0  BEACON_STATE_OFF=1  BEACON_STATE_FLASHING_RED=2
+                        BEACON_STATE_FLASHING_GREEN=3  BEACON_STATE_FLASHING_BLUE=4  BEACON_STATE_STEADY_BLUE=5
 
-Color:          COLOR_UNKNOWN=0  COLOR_RED=1  COLOR_GREEN=2  COLOR_BLUE=3  COLOR_YELLOW=4
+PipelineSegmentStatus:  PIPELINE_SEGMENT_UNKNOWN=0  PIPELINE_SEGMENT_INTACT=1  PIPELINE_SEGMENT_DAMAGED=2
 
-MissionCommand: CMD_NONE=0  CMD_GO=1  CMD_MISSION_DONE=2  CMD_DELIVERY=3
-                CMD_TASK4_NAVIGATE=4  CMD_TASK4_AVOID_ZONE=5  CMD_TASK4_DYNAMIC_AVOID=6
-                CMD_READINESS_CONFIRM=7  CMD_ALL_CLEAR=8
+FlightPhase:            FLIGHT_PHASE_UNKNOWN=0  FLIGHT_PHASE_GROUNDED=1  FLIGHT_PHASE_AIRBORNE=2
 
-BuoyDetection:  STATE_UNKNOWN=0  STATE_NORMAL=1  STATE_DAMAGED=2  STATE_MISSING=3
+Color:                  COLOR_UNKNOWN=0  COLOR_RED=1  COLOR_GREEN=2  COLOR_BLUE=3  COLOR_ANY=4
 
-PipelineStatus: PIPELINE_UNKNOWN=0  PIPELINE_INTACT=1  PIPELINE_DAMAGED=2
-
-Task4Status:    TASK4_UNKNOWN=0  TASK4_RECEIVED=1  TASK4_NAVIGATING=2  TASK4_REACHED=3
-                TASK4_ACTIVE=4  TASK4_CLEARED=5  TASK4_REJECTED=6  TASK4_FAILED=7
+Command:                CMD_NONE=0  CMD_RUN_START=1  CMD_DELIVERY=2  CMD_TASK4_ASSISTANCE=3
+                        CMD_TASK4_KEEP_OUT_ZONE=4  CMD_TASK4_ALL_CLEAR=5  CMD_TASK4_MOVING_OBJECT=6
+                        CMD_TASK4_READINESS_CONFIRM=7  CMD_GO=8  CMD_MISSION_DONE=9
 ```
 
-If the protobuf definitions (`rx_request.proto`, `rx_report.proto`, `rx_common.proto`) evolve, `rx_msgs` must be updated and every system re-verified so all four remain interoperable.
+If the RoboCommand schema release changes, update `rx_msgs` to match (values and field order) so the GCS relay stays compatible.

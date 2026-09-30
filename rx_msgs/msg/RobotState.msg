@@ -1,11 +1,5 @@
-# High-level operational state of a vehicle
+# Vehicle control state (mirrors robocommand.common.v1.RobotState)
 uint8 STATE_UNKNOWN = 0
-uint8 STATE_OFFLINE = 1
-uint8 STATE_IDLE = 2
-uint8 STATE_READY = 3
-uint8 STATE_MISSION = 4
-uint8 STATE_RETURNING = 5
-uint8 STATE_LANDED = 6
-uint8 STATE_DOCKED = 7
-uint8 STATE_EMERGENCY = 8
-uint8 STATE_FAULT = 9
+uint8 STATE_KILLED = 1
+uint8 STATE_MANUAL = 2
+uint8 STATE_AUTO = 3

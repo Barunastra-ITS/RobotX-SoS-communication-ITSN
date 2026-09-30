@@ -1,5 +1,5 @@
-# Identifies a vehicle in the System-of-Systems
-uint8 UNKNOWN = 255
-uint8 UAV = 0
-uint8 USV = 1
-uint8 UUV = 2
+# Vehicle class (mirrors robocommand.robotx.v1.VehicleType)
+uint8 TYPE_UNKNOWN = 0
+uint8 TYPE_USV = 1
+uint8 TYPE_UUV = 2
+uint8 TYPE_UAV = 3

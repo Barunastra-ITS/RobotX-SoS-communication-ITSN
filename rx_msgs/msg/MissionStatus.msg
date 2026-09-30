@@ -1,9 +1,7 @@
-# /system/mission/status — overall mission status from vehicles to RoboCommand
+# /system/mission/status — vehicle -> GCS overall state
 std_msgs/Header header
-uint32 mission_id
+uint32 run_id
 string vehicle_id
-# RobotState constants
 uint8 state
-# RxTask constants
 uint8 current_task
 string message

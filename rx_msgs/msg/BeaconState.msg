@@ -1,0 +1,7 @@
+# Task 1 buoy LED beacon states (mirrors robocommand.robotx.v1.BeaconState)
+uint8 BEACON_STATE_UNKNOWN = 0
+uint8 BEACON_STATE_OFF = 1
+uint8 BEACON_STATE_FLASHING_RED = 2
+uint8 BEACON_STATE_FLASHING_GREEN = 3
+uint8 BEACON_STATE_FLASHING_BLUE = 4
+uint8 BEACON_STATE_STEADY_BLUE = 5
