@@ -71,16 +71,6 @@ Publish `/system/vehicle/<vehicle>/heartbeat` (`rx_msgs/Heartbeat`) continuously
 | `current_task`, `vehicle_type`                                         |  ✓  |  ✓  |  ✓  |
 | `flight_phase`                                                         |  ✓  |  —  |  —  |
 
-### 3.3 Task 1 — buoy reports
-
-| Topic                                          | Type                   |
-| ---------------------------------------------- | ---------------------- |
-| `/system/vehicle/<vehicle>/task1/entry_buoy`   | `rx_msgs/LatLng`       |
-| `/system/vehicle/<vehicle>/task1/exit_buoy`    | `rx_msgs/LatLng`       |
-| `/system/vehicle/<vehicle>/task1/buoy_detection` | `rx_msgs/BuoyDetection` |
-
-The same topics are used for every mission tier; the active tier determines when the information is required.
-
 ---
 
 ## 4. Per-Vehicle Interface
@@ -89,11 +79,15 @@ The same topics are used for every mission tier; the active tier determines when
 
 | Topic                                    | Type                  |
 | ---------------------------------------- | --------------------- |
+| `/system/vehicle/uav/task1/entry_buoy`   | `rx_msgs/LatLng`      |
+| `/system/vehicle/uav/task1/exit_buoy`    | `rx_msgs/LatLng`      |
+| `/system/vehicle/uav/task1/buoy_detection` | `rx_msgs/BuoyDetection` |
 | `/system/vehicle/uav/task2/active_buoy`  | `rx_msgs/LatLng`      |
 | `/system/vehicle/uav/task2/delivery`     | `rx_msgs/Delivery`    |
 | `/system/vehicle/uav/task3/delivery`     | `rx_msgs/Delivery`    |
 | `/system/vehicle/uav/task4/status`       | `rx_msgs/Task4Status` |
 
+- Task 1 is UAV-only: the buoy reports above feed the USV's mission planning (see 4.2).
 - Task 2 reports are required for the Advance and Disruptive tiers.
 - **Legacy bridge:** the existing UAV mission controller consumes the internal `/mission/order` topic with string commands (`UAV-GO`, `UAV-GO:RED:GREEN`, `MISSION-DONE`). Your communication layer must translate `/system/mission/command` into these strings and keep `/mission/order` inside the UAV domain.
 
@@ -105,7 +99,8 @@ The same topics are used for every mission tier; the active tier determines when
 | `/system/vehicle/usv/task3/delivery`    | `rx_msgs/Delivery`    |
 | `/system/vehicle/usv/task4/status`      | `rx_msgs/Task4Status` |
 
-`Docking` carries `bay_id` and `extinguished_window_id` (the window/light that was extinguished and changed from red to green).
+- **Subscribes** to the UAV Task 1 buoy reports (`/system/vehicle/uav/task1/entry_buoy`, `exit_buoy`, `buoy_detection`) for mission planning.
+- `Docking` carries `bay_id` and `extinguished_window_id` (the window/light that was extinguished and changed from red to green).
 
 ### 4.3 UUV
 
